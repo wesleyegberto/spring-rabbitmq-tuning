@@ -2,7 +2,9 @@ package com.tradeshift.amqp.annotation;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -10,7 +12,8 @@ import static org.mockito.Mockito.when;
 import java.lang.reflect.Method;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.stream.IntStream;
+import java.util.List;
+import java.util.Map;
 
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.reflect.MethodSignature;
@@ -33,7 +36,10 @@ import com.tradeshift.amqp.rabbit.retry.QueueRetryComponent;
 @RunWith(SpringRunner.class)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 public class EnableRabbitRetryAndDlqAspectTest {
-	private static TunedRabbitProperties createQueueProperties;
+	private static final String X_DEATH = "x-death";
+	private static final String COUNT = "count";
+
+	private static final TunedRabbitProperties createQueueProperties = createQueueProperties();
 
 	@Mock
 	private TunedRabbitPropertiesMap tunnedRabbitPropertiesMap;
@@ -46,15 +52,23 @@ public class EnableRabbitRetryAndDlqAspectTest {
 	@Spy
 	private EnableRabbitRetryAndDlqAspect aspect;
 
-	@BeforeClass
-	public static void setUp() {
-		createQueueProperties = createQueueProperties();
-	}
-
 	@Before
 	public void beforeEach() {
 		when(tunnedRabbitPropertiesMap.get("some-event")).thenReturn(createQueueProperties);
-
+		
+		// replicates the method because part of it is not visible
+		when(queueComponent.countDeath(any(Message.class))).thenAnswer((invocation) -> {
+				Message message = invocation.getArgument(0);
+		        int count = 0;
+		        final Map<String, Object> headers = message.getMessageProperties().getHeaders();
+		        if (headers.containsKey(X_DEATH)) {
+		        	final List list = (List) Collections.singletonList(headers.get(X_DEATH)).get(0);
+		            count = Integer.parseInt(((Map) list.get(0)).get(COUNT).toString());
+		        }
+		        return ++count;
+			});
+		
+		doCallRealMethod().when(queueComponent).sendToRetryOrDlq(any(Message.class), any());
 	}
 
 	@Test
@@ -65,7 +79,8 @@ public class EnableRabbitRetryAndDlqAspectTest {
 
 		aspect.validateMessage(joinPoint);
 
-		verifyIfRetryWasCalled(1);
+		verifyIfSentToRetryOrDlqWasCalled(1);
+		verifyIfRetryWasCalled(1, 2);
 		verifyIfDlqWasCalled(0);
 	}
 
@@ -77,8 +92,22 @@ public class EnableRabbitRetryAndDlqAspectTest {
 
 		aspect.validateMessage(joinPoint);
 
-		verifyIfRetryWasCalled(1);
+		verifyIfSentToRetryOrDlqWasCalled(1);
+		verifyIfRetryWasCalled(1, 2);
 		verifyIfDlqWasCalled(0);
+	}
+
+	@Test
+	@EnableRabbitRetryAndDlq(event = "some-event", exceptions = NumberFormatException.class)
+	public void should_send_to_dlq_when_maximum_number_retries_exceeds() throws Throwable {
+		ProceedingJoinPoint joinPoint = mockJointPointWithDeathAndThrowing(
+				"should_send_to_dlq_when_maximum_number_retries_exceeds", 6, NumberFormatException.class);
+
+		aspect.validateMessage(joinPoint);
+
+		verifyIfSentToRetryOrDlqWasCalled(1);
+		verifyIfRetryWasCalled(0, 0);
+		verifyIfDlqWasCalled(1);
 	}
 
 	@Test
@@ -89,7 +118,8 @@ public class EnableRabbitRetryAndDlqAspectTest {
 
 		aspect.validateMessage(joinPoint);
 
-		verifyIfRetryWasCalled(1);
+		verifyIfSentToRetryOrDlqWasCalled(1);
+		verifyIfRetryWasCalled(1, 2);
 		verifyIfDlqWasCalled(0);
 	}
 
@@ -102,14 +132,16 @@ public class EnableRabbitRetryAndDlqAspectTest {
 
 		aspect.validateMessage(joinPoint);
 
-		verifyIfRetryWasCalled(1);
+		verifyIfSentToRetryOrDlqWasCalled(1);
+		verifyIfRetryWasCalled(1, 2);
 		verifyIfDlqWasCalled(0);
 	}
 
 	@Test
 	@EnableRabbitRetryAndDlq(event = "some-event",
 		discartWhen = NumberFormatException.class,
-		retryWhen = NumberFormatException.class
+		retryWhen = NumberFormatException.class,
+		directToDlqWhen = NumberFormatException.class
 	)
 	public void should_send_discart_even_when_retryWhen_contains_same_exception() throws Throwable {
 		ProceedingJoinPoint joinPoint = mockJointPointWithDeathAndThrowing(
@@ -117,7 +149,24 @@ public class EnableRabbitRetryAndDlqAspectTest {
 
 		aspect.validateMessage(joinPoint);
 
-		verifyIfRetryWasCalled(0);
+		verifiySentToRetryNeverCalled();
+		verifyIfDlqWasCalled(0);
+	}
+
+	@Test
+	@EnableRabbitRetryAndDlq(event = "some-event",
+		discartWhen = IllegalArgumentException.class,
+		retryWhen = NumberFormatException.class,
+		directToDlqWhen = NumberFormatException.class
+	)
+	public void should_send_retry_even_when_retryWhen_and_directToDlqWhen_contains_same_exception() throws Throwable {
+		ProceedingJoinPoint joinPoint = mockJointPointWithDeathAndThrowing(
+				"should_send_retry_even_when_retryWhen_and_directToDlqWhen_contains_same_exception", 1, NumberFormatException.class);
+
+		aspect.validateMessage(joinPoint);
+
+		verifyIfSentToRetryOrDlqWasCalled(1);
+		verifyIfRetryWasCalled(1, 2);
 		verifyIfDlqWasCalled(0);
 	}
 
@@ -133,7 +182,7 @@ public class EnableRabbitRetryAndDlqAspectTest {
 
 		aspect.validateMessage(joinPoint);
 
-		verifyIfRetryWasCalled(0);
+		verifiySentToRetryNeverCalled();
 		verifyIfDlqWasCalled(1);
 	}
 
@@ -150,27 +199,39 @@ public class EnableRabbitRetryAndDlqAspectTest {
 
 		aspect.validateMessage(joinPoint);
 
-		verifyIfRetryWasCalled(0);
+		verifiySentToRetryNeverCalled();
 		verifyIfDlqWasCalled(1);
+	}
+	
+	private void verifiySentToRetryNeverCalled() {
+		verify(queueComponent, never()).sendToRetryOrDlq(any(Message.class), any());
+		verify(queueComponent, never()).sendToRetry(any(Message.class), any(), any());
+	}
+
+	private void verifyIfSentToRetryOrDlqWasCalled(int numberOfTimes) {
+		verify(queueComponent, times(numberOfTimes)).sendToRetryOrDlq(any(Message.class), eq(createQueueProperties));
+	}
+
+	private void verifyIfRetryWasCalled(int numberOfTimes, int deathExpected) {
+		verify(queueComponent, times(numberOfTimes)).sendToRetry(any(Message.class), eq(createQueueProperties), eq(deathExpected));
+	}
+
+	private void verifyIfDlqWasCalled(int numberOfTimes) {
+		verify(queueComponent, times(numberOfTimes)).sendToDlq(any(Message.class), eq(createQueueProperties));
 	}
 
 	private ProceedingJoinPoint mockJointPointWithDeathAndThrowing(String testMethodName, int numbreOfDeaths,
 			Class<? extends Exception> exceptionToThrown) throws Throwable {
 		ProceedingJoinPoint joinPoint = mock(ProceedingJoinPoint.class);
+		
 		Method method = mockMethodUsingTestingMethod(testMethodName);
 		when(signature.getMethod()).thenReturn(method);
+		when(joinPoint.getSignature()).thenReturn(signature);
+		
 		when(joinPoint.getArgs()).thenReturn(new Message[] { createMessageWithDeath(numbreOfDeaths) });
 		when(joinPoint.proceed()).thenThrow(exceptionToThrown);
-		when(joinPoint.getSignature()).thenReturn(signature);
+		
 		return joinPoint;
-	}
-
-	private void verifyIfRetryWasCalled(int numberOfTimes) {
-		verify(queueComponent, times(numberOfTimes)).sendToRetryOrDlq(any(Message.class), eq(createQueueProperties));
-	}
-
-	private void verifyIfDlqWasCalled(int numberOfTimes) {
-		verify(queueComponent, times(numberOfTimes)).sendToDlq(any(Message.class), eq(createQueueProperties));
 	}
 
 	private Method mockMethodUsingTestingMethod(String testingMethodName)
@@ -179,15 +240,11 @@ public class EnableRabbitRetryAndDlqAspectTest {
 	}
 
 	private static Message createMessageWithDeath(int numberOfDeaths) {
-		return new Message("some".getBytes(), createMessageProperties(numberOfDeaths));
-	}
-
-	private static MessageProperties createMessageProperties(Integer numberOfDeaths) {
 		MessageProperties messageProperties = new MessageProperties();
-		HashMap<String, Integer> map = new HashMap();
-		IntStream.range(0, numberOfDeaths).forEach(value -> map.put("count", value));
-		messageProperties.getHeaders().put("x-death", Collections.singletonList(map));
-		return messageProperties;
+		HashMap<String, Integer> map = new HashMap<>();
+		map.put(COUNT, numberOfDeaths);
+		messageProperties.getHeaders().put(X_DEATH, Collections.singletonList(map));
+		return new Message("some".getBytes(), messageProperties);
 	}
 
 	private static TunedRabbitProperties createQueueProperties() {
@@ -195,7 +252,6 @@ public class EnableRabbitRetryAndDlqAspectTest {
 		queueProperties.setQueue("queue.test");
 		queueProperties.setExchange("ex.test");
 		queueProperties.setExchangeType("topic");
-		queueProperties.setMaxRetriesAttempts(5);
 		queueProperties.setQueueRoutingKey("routing.key.test");
 		queueProperties.setTtlRetryMessage(5000);
 		queueProperties.setPrimary(true);
@@ -206,7 +262,7 @@ public class EnableRabbitRetryAndDlqAspectTest {
 		queueProperties.setPort(5672);
 		queueProperties.setSslConnection(false);
 		queueProperties.setTtlMultiply(1);
-		queueProperties.setMaxRetriesAttempts(1);
+		queueProperties.setMaxRetriesAttempts(3);
 		return queueProperties;
 	}
 }
