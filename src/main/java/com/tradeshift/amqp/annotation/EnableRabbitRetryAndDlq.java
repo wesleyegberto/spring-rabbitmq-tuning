@@ -42,7 +42,7 @@ public @interface EnableRabbitRetryAndDlq {
      * Exceptions to verify if the message should be sent to retry.
      * If the number of retries is exceeded the message will be sent to DLQ.
      */
-    Class[] retryWhen() default Exception.class;
+    Class[] retryWhen() default {};
     
     /**
      *  Exceptions to verify if the message should be sent to DLQ. 
