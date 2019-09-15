@@ -36,27 +36,89 @@ public class EnableRabbitRetryAndDlqAspect {
 
     @Around("com.tradeshift.amqp.annotation.CommonJoinPointConfig.enableRabbitRetryAndDlqAnnotation()")
     public void validateMessage(ProceedingJoinPoint joinPoint) throws Throwable {
-        Method method = getMethod(joinPoint);
-        EnableRabbitRetryAndDlq annotation = method.getAnnotation(EnableRabbitRetryAndDlq.class);
-        String queueProperty = annotation.event();
-        List<Class> exceptions = Arrays.asList(annotation.exceptions());
-        Message message = (Message) joinPoint.getArgs()[0];
         try {
             joinPoint.proceed();
         } catch (Exception e) {
-            log.info("The listener [{}.{}] threw an exception: {}", method.getDeclaringClass().getSimpleName(), method.getName(), e.getMessage());
-            if (exceptions.contains(Exception.class) || exceptions.contains(e.getClass())) {
-                TunedRabbitProperties properties = rabbitCustomPropertiesMap.get(queueProperty);
-                if (Objects.isNull(properties)) {
-                    throw new NoSuchBeanDefinitionException(String.format("Any bean with name %s was found", queueProperty));
-                }
-                queueRetryComponent.sendToRetryOrDlq(message, properties);
-            }
+            handleExceptionUsingEventDefinitions(e, joinPoint);
         }
     }
+
+    /**
+     * Handle the exception as defined by the annotation.
+     * Checking order:
+     * - Should be discarted
+     * - Should be sent to retry
+     * - Should be sent to DLQ
+     * - Otherwise discart
+     */
+	private void handleExceptionUsingEventDefinitions(Exception exceptionThrown, ProceedingJoinPoint joinPoint) {
+        Method method = getMethod(joinPoint);
+        log.info("The listener [{}.{}] threw an exception: {}", method.getDeclaringClass().getSimpleName(), method.getName(), exceptionThrown.getMessage());
+        
+        EnableRabbitRetryAndDlq annotation = method.getAnnotation(EnableRabbitRetryAndDlq.class);
+        
+        if (shouldDiscart(annotation, exceptionThrown)) {
+        	log.warn("Exception {} was parametrized to be discarted", exceptionThrown.getClass().getSimpleName());
+        } else if (shouldSentToRetry(annotation, exceptionThrown)) {
+			sendMessageToRetry(joinPoint, annotation);
+		} else if (shouldSentDirectToDlq(annotation, exceptionThrown) ) {
+			sendMessageToDlq(joinPoint, annotation);
+		} else {
+			log.error("Discarting message after exception {}: {}", exceptionThrown.getClass().getSimpleName(), exceptionThrown.getMessage());
+		}
+	}
+
+	private boolean shouldDiscart(EnableRabbitRetryAndDlq annotation, Exception exceptionThrown) {
+        return checkIfContainsException(annotation, annotation.discartWhen(), exceptionThrown);
+	}
+
+	private boolean shouldSentToRetry(EnableRabbitRetryAndDlq annotation, Exception exceptionThrown) {
+        if (annotation.retryWhen() != null && annotation.retryWhen().length > 0) {
+        	return checkIfContainsException(annotation, annotation.retryWhen(), exceptionThrown);
+        }
+        // TODO: define if backwards compatibility will be preserved (keep exceptions attribute)
+        return checkIfContainsException(annotation, annotation.exceptions(), exceptionThrown);
+	}
+
+	private boolean shouldSentDirectToDlq(EnableRabbitRetryAndDlq annotation, Exception exceptionThrown) {
+        return checkIfContainsException(annotation, annotation.directToDlqWhen(), exceptionThrown);
+	}
+
+	private void sendMessageToRetry(ProceedingJoinPoint joinPoint, EnableRabbitRetryAndDlq annotation) {
+		TunedRabbitProperties properties = getPropertiesByAnnotationEvent(annotation);
+		Message message = (Message) joinPoint.getArgs()[0];
+		queueRetryComponent.sendToRetryOrDlq(message, properties);
+	}
+
+	private void sendMessageToDlq(ProceedingJoinPoint joinPoint, EnableRabbitRetryAndDlq annotation) {
+		TunedRabbitProperties properties = getPropertiesByAnnotationEvent(annotation);
+		Message message = (Message) joinPoint.getArgs()[0];
+		queueRetryComponent.sendToDlq(message, properties);
+	}
 
     private Method getMethod(ProceedingJoinPoint joinPoint) {
         MethodSignature signature = (MethodSignature) joinPoint.getSignature();
         return signature.getMethod();
+    }
+
+	private boolean checkIfContainsException(EnableRabbitRetryAndDlq annotation, Class<?>[] acceptableExceptions, Exception exceptionThrown) {
+		if (acceptableExceptions.length == 0)
+			return false;
+		
+		List<Class<?>> exceptions = Arrays.asList(acceptableExceptions);
+		if (annotation.checkInheritance()) {
+        	return exceptions.stream()
+        			.anyMatch(type -> type.isAssignableFrom(exceptionThrown.getClass()));
+        }
+		return exceptions.contains(Exception.class) || exceptions.contains(exceptionThrown.getClass());
+	}
+    
+    private TunedRabbitProperties getPropertiesByAnnotationEvent(EnableRabbitRetryAndDlq annotation) {
+    	String queueProperty = annotation.event();
+		TunedRabbitProperties properties = rabbitCustomPropertiesMap.get(queueProperty);
+		if (Objects.isNull(properties)) {
+		    throw new NoSuchBeanDefinitionException(String.format("Any bean with name %s was found", queueProperty));
+		}
+		return properties;
     }
 }
