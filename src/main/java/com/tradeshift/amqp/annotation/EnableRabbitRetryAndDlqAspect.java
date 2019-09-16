@@ -52,14 +52,14 @@ public class EnableRabbitRetryAndDlqAspect {
      * - Otherwise discart
      */
 	private void handleExceptionUsingEventDefinitions(Exception exceptionThrown, ProceedingJoinPoint joinPoint) {
-        Method method = getMethod(joinPoint);
-        log.info("The listener [{}.{}] threw an exception: {}", method.getDeclaringClass().getSimpleName(), method.getName(), exceptionThrown.getMessage());
-        
-        EnableRabbitRetryAndDlq annotation = method.getAnnotation(EnableRabbitRetryAndDlq.class);
-        
-        if (shouldDiscart(annotation, exceptionThrown)) {
-        	log.warn("Exception {} was parametrized to be discarted", exceptionThrown.getClass().getSimpleName());
-        } else if (shouldSentToRetry(annotation, exceptionThrown)) {
+		Method method = getMethod(joinPoint);
+		log.info("The listener [{}.{}] threw an exception: {}", method.getDeclaringClass().getSimpleName(), method.getName(), exceptionThrown.getMessage());
+
+		EnableRabbitRetryAndDlq annotation = method.getAnnotation(EnableRabbitRetryAndDlq.class);
+
+		if (shouldDiscart(annotation, exceptionThrown)) {
+			log.warn("Exception {} was parametrized to be discarted", exceptionThrown.getClass().getSimpleName());
+		} else if (shouldSentToRetry(annotation, exceptionThrown)) {
 			sendMessageToRetry(joinPoint, annotation);
 		} else if (shouldSentDirectToDlq(annotation, exceptionThrown) ) {
 			sendMessageToDlq(joinPoint, annotation);
@@ -110,6 +110,11 @@ public class EnableRabbitRetryAndDlqAspect {
         	return exceptions.stream()
         			.anyMatch(type -> type.isAssignableFrom(exceptionThrown.getClass()));
         }
+        /*
+         * Here if is used the previous way with its default value (`exceptions() = { Exception.class }`)
+         * then the DLQ list verification will never happen because the retry list will accept the thrown
+         * exception in the `exceptions.contains(Exception.class)` verification.
+         */
 		return exceptions.contains(Exception.class) || exceptions.contains(exceptionThrown.getClass());
 	}
     

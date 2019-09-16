@@ -18,7 +18,6 @@ import java.util.Map;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.junit.Before;
-import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.InjectMocks;
@@ -196,6 +195,20 @@ public class EnableRabbitRetryAndDlqAspectTest {
 		ProceedingJoinPoint joinPoint = mockJointPointWithDeathAndThrowing(
 				"should_send_dlq_when_only_directToDlqWhen_exceptions_contains_checking_inheritance", 1,
 				NumberFormatException.class);
+
+		aspect.validateMessage(joinPoint);
+
+		verifiySentToRetryNeverCalled();
+		verifyIfDlqWasCalled(1);
+	}
+
+	@Test
+	@EnableRabbitRetryAndDlq(event = "some-event",
+		directToDlqWhen = NumberFormatException.class
+	)
+	public void should_send_dlq_when_only_directToDlqWhen_exceptions_contains_and_no_other_defined() throws Throwable {
+		ProceedingJoinPoint joinPoint = mockJointPointWithDeathAndThrowing(
+				"should_send_dlq_when_only_directToDlqWhen_exceptions_contains_and_no_other_defined", 1, NumberFormatException.class);
 
 		aspect.validateMessage(joinPoint);
 
