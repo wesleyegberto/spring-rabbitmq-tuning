@@ -54,19 +54,19 @@ public class EnableRabbitRetryAndDlqAspectTest {
 	@Before
 	public void beforeEach() {
 		when(tunnedRabbitPropertiesMap.get("some-event")).thenReturn(createQueueProperties);
-		
+
 		// replicates the method because part of it is not visible
 		when(queueComponent.countDeath(any(Message.class))).thenAnswer((invocation) -> {
-				Message message = invocation.getArgument(0);
-		        int count = 0;
-		        final Map<String, Object> headers = message.getMessageProperties().getHeaders();
-		        if (headers.containsKey(X_DEATH)) {
-		        	final List list = (List) Collections.singletonList(headers.get(X_DEATH)).get(0);
-		            count = Integer.parseInt(((Map) list.get(0)).get(COUNT).toString());
-		        }
-		        return ++count;
-			});
-		
+			Message message = invocation.getArgument(0);
+			int count = 0;
+			final Map<String, Object> headers = message.getMessageProperties().getHeaders();
+			if (headers.containsKey(X_DEATH)) {
+				final List list = (List) Collections.singletonList(headers.get(X_DEATH)).get(0);
+				count = Integer.parseInt(((Map) list.get(0)).get(COUNT).toString());
+			}
+			return ++count;
+		});
+
 		doCallRealMethod().when(queueComponent).sendToRetryOrDlq(any(Message.class), any());
 	}
 
@@ -138,10 +138,10 @@ public class EnableRabbitRetryAndDlqAspectTest {
 
 	@Test
 	@EnableRabbitRetryAndDlq(event = "some-event",
-		discartWhen = NumberFormatException.class,
-		retryWhen = NumberFormatException.class,
-		directToDlqWhen = NumberFormatException.class
-	)
+	discartWhen = NumberFormatException.class,
+	retryWhen = NumberFormatException.class,
+	directToDlqWhen = NumberFormatException.class
+			)
 	public void should_send_discart_even_when_retryWhen_contains_same_exception() throws Throwable {
 		ProceedingJoinPoint joinPoint = mockJointPointWithDeathAndThrowing(
 				"should_send_discart_even_when_retryWhen_contains_same_exception", 1, NumberFormatException.class);
@@ -154,27 +154,29 @@ public class EnableRabbitRetryAndDlqAspectTest {
 
 	@Test
 	@EnableRabbitRetryAndDlq(event = "some-event",
-		discartWhen = IllegalArgumentException.class,
-		retryWhen = NumberFormatException.class,
-		directToDlqWhen = NumberFormatException.class
-	)
-	public void should_send_retry_even_when_retryWhen_and_directToDlqWhen_contains_same_exception() throws Throwable {
+	discartWhen = IllegalArgumentException.class,
+	retryWhen = NumberFormatException.class,
+	directToDlqWhen = NumberFormatException.class
+			)
+	public void should_send_dlq_even_when_retryWhen_and_directToDlqWhen_contains_same_exception() throws Throwable {
 		ProceedingJoinPoint joinPoint = mockJointPointWithDeathAndThrowing(
-				"should_send_retry_even_when_retryWhen_and_directToDlqWhen_contains_same_exception", 1, NumberFormatException.class);
+				"should_send_dlq_even_when_retryWhen_and_directToDlqWhen_contains_same_exception", 1, NumberFormatException.class);
 
 		aspect.validateMessage(joinPoint);
 
-		verifyIfSentToRetryOrDlqWasCalled(1);
-		verifyIfRetryWasCalled(1, 2);
-		verifyIfDlqWasCalled(0);
+		// verifyIfSentToRetryOrDlqWasCalled(1);
+		// verifyIfRetryWasCalled(1, 2);
+		// verifyIfDlqWasCalled(0);
+		verifiySentToRetryNeverCalled();
+		verifyIfDlqWasCalled(1);
 	}
 
 	@Test
 	@EnableRabbitRetryAndDlq(event = "some-event",
-		discartWhen = NullPointerException.class,
-		retryWhen = IllegalArgumentException.class,
-		directToDlqWhen = NumberFormatException.class
-	)
+	discartWhen = NullPointerException.class,
+	retryWhen = IllegalArgumentException.class,
+	directToDlqWhen = NumberFormatException.class
+			)
 	public void should_send_dlq_when_only_directToDlqWhen_exceptions_contains() throws Throwable {
 		ProceedingJoinPoint joinPoint = mockJointPointWithDeathAndThrowing(
 				"should_send_dlq_when_only_directToDlqWhen_exceptions_contains", 1, NumberFormatException.class);
@@ -187,10 +189,10 @@ public class EnableRabbitRetryAndDlqAspectTest {
 
 	@Test
 	@EnableRabbitRetryAndDlq(event = "some-event", checkInheritance = true,
-		discartWhen = NullPointerException.class,
-		retryWhen = IllegalStateException.class,
-		directToDlqWhen = IllegalArgumentException.class
-	)
+	discartWhen = NullPointerException.class,
+	retryWhen = IllegalStateException.class,
+	directToDlqWhen = IllegalArgumentException.class
+			)
 	public void should_send_dlq_when_only_directToDlqWhen_exceptions_contains_checking_inheritance() throws Throwable {
 		ProceedingJoinPoint joinPoint = mockJointPointWithDeathAndThrowing(
 				"should_send_dlq_when_only_directToDlqWhen_exceptions_contains_checking_inheritance", 1,
@@ -204,8 +206,8 @@ public class EnableRabbitRetryAndDlqAspectTest {
 
 	@Test
 	@EnableRabbitRetryAndDlq(event = "some-event",
-		directToDlqWhen = NumberFormatException.class
-	)
+	directToDlqWhen = NumberFormatException.class
+			)
 	public void should_send_dlq_when_only_directToDlqWhen_exceptions_contains_and_no_other_defined() throws Throwable {
 		ProceedingJoinPoint joinPoint = mockJointPointWithDeathAndThrowing(
 				"should_send_dlq_when_only_directToDlqWhen_exceptions_contains_and_no_other_defined", 1, NumberFormatException.class);
@@ -215,7 +217,7 @@ public class EnableRabbitRetryAndDlqAspectTest {
 		verifiySentToRetryNeverCalled();
 		verifyIfDlqWasCalled(1);
 	}
-	
+
 	private void verifiySentToRetryNeverCalled() {
 		verify(queueComponent, never()).sendToRetryOrDlq(any(Message.class), any());
 		verify(queueComponent, never()).sendToRetry(any(Message.class), any(), any());
@@ -236,14 +238,14 @@ public class EnableRabbitRetryAndDlqAspectTest {
 	private ProceedingJoinPoint mockJointPointWithDeathAndThrowing(String testMethodName, int numbreOfDeaths,
 			Class<? extends Exception> exceptionToThrown) throws Throwable {
 		ProceedingJoinPoint joinPoint = mock(ProceedingJoinPoint.class);
-		
+
 		Method method = mockMethodUsingTestingMethod(testMethodName);
 		when(signature.getMethod()).thenReturn(method);
 		when(joinPoint.getSignature()).thenReturn(signature);
-		
+
 		when(joinPoint.getArgs()).thenReturn(new Message[] { createMessageWithDeath(numbreOfDeaths) });
 		when(joinPoint.proceed()).thenThrow(exceptionToThrown);
-		
+
 		return joinPoint;
 	}
 
